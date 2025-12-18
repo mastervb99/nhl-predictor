@@ -14,3 +14,6 @@ scikit-learn>=1.3.0
 # Web scraping (for live data)
 requests>=2.31.0
 beautifulsoup4>=4.12.0
+
+# PDF export
+reportlab>=4.0.0
