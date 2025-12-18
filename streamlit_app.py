@@ -204,6 +204,92 @@ st.markdown("""
         background-color: #21262d !important;
         border-radius: 8px !important;
     }
+
+    /* Force all text to be light colored on dark background */
+    .stApp, .stApp p, .stApp span, .stApp div, .stApp label {
+        color: #c9d1d9 !important;
+    }
+
+    /* Tab content text */
+    .stTabs [data-baseweb="tab-panel"] {
+        color: #c9d1d9 !important;
+    }
+    .stTabs [data-baseweb="tab-panel"] p,
+    .stTabs [data-baseweb="tab-panel"] span,
+    .stTabs [data-baseweb="tab-panel"] div {
+        color: #c9d1d9 !important;
+    }
+
+    /* Metric styling */
+    [data-testid="stMetricValue"] {
+        color: #58a6ff !important;
+    }
+    [data-testid="stMetricLabel"] {
+        color: #8b949e !important;
+    }
+    [data-testid="stMetricDelta"] {
+        color: #3fb950 !important;
+    }
+
+    /* Markdown text */
+    .stMarkdown, .stMarkdown p, .stMarkdown span {
+        color: #c9d1d9 !important;
+    }
+    .stMarkdown strong, .stMarkdown b {
+        color: #ffffff !important;
+    }
+
+    /* Info/warning boxes */
+    .stAlert {
+        background-color: #21262d !important;
+        color: #c9d1d9 !important;
+    }
+
+    /* Expander content */
+    [data-testid="stExpander"] {
+        background-color: #161b22 !important;
+        border: 1px solid #30363d !important;
+        border-radius: 8px !important;
+    }
+    [data-testid="stExpander"] summary {
+        color: #c9d1d9 !important;
+    }
+    [data-testid="stExpander"] div {
+        color: #c9d1d9 !important;
+    }
+
+    /* Download button */
+    .stDownloadButton button {
+        background-color: #238636 !important;
+        color: white !important;
+        border: none !important;
+    }
+    .stDownloadButton button:hover {
+        background-color: #2ea043 !important;
+    }
+
+    /* Date input */
+    .stDateInput label {
+        color: #c9d1d9 !important;
+    }
+
+    /* Selectbox */
+    .stSelectbox label {
+        color: #c9d1d9 !important;
+    }
+
+    /* Horizontal rule */
+    hr {
+        border-color: #30363d !important;
+    }
+
+    /* Tab labels */
+    .stTabs [data-baseweb="tab-list"] button {
+        color: #8b949e !important;
+    }
+    .stTabs [data-baseweb="tab-list"] button[aria-selected="true"] {
+        color: #58a6ff !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
