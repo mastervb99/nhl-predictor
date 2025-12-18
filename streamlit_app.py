@@ -1,161 +1,330 @@
 """
 NHL Game Prediction Model - Streamlit App
-Poisson + Monte Carlo + ML Ensemble
+Card-Style UI with Live Data Integration
 """
 import streamlit as st
-import numpy as np
 import pandas as pd
-from datetime import date
+from datetime import date, datetime
+from typing import Dict, List, Optional
 
 # Import prediction agents
 from agents.poisson_engine import PoissonEngine
 from agents.monte_carlo import MonteCarloSimulator, MonteCarloConfig
 from agents.edge_calculator import EdgeCalculator
+from agents.period_model import PeriodModel
+from agents.props_model import PropsModel
+from agents.data_ingestor import DataIngestor
 
-# Page config
+# PDF export (optional - will work without reportlab)
+try:
+    from utils.pdf_export import export_game_pdf, export_overview_pdf
+    HAS_PDF_EXPORT = True
+except ImportError:
+    HAS_PDF_EXPORT = False
+
+# Page config - Dark theme
 st.set_page_config(
-    page_title="NHL Prediction Model",
+    page_title="NHL Predictions",
     page_icon="🏒",
     layout="wide",
+    initial_sidebar_state="collapsed",
 )
 
-# Custom CSS
+# Custom CSS for card-style dark theme
 st.markdown("""
 <style>
-    .big-number {
-        font-size: 48px;
-        font-weight: bold;
+    /* Dark theme base */
+    .stApp {
+        background-color: #0e1117;
+    }
+
+    /* Game card styling */
+    .game-card {
+        background: linear-gradient(145deg, #1a1f2e 0%, #151922 100%);
+        border-radius: 12px;
+        padding: 20px;
+        margin: 10px 0;
+        border: 1px solid #2d3748;
+        transition: transform 0.2s, box-shadow 0.2s;
+    }
+    .game-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 8px 25px rgba(0,0,0,0.3);
+    }
+
+    /* Team info */
+    .team-name {
+        font-size: 18px;
+        font-weight: 600;
+        color: #ffffff;
+    }
+    .team-code {
+        font-size: 14px;
+        color: #8b949e;
+    }
+
+    /* Win probability display */
+    .win-prob {
+        font-size: 32px;
+        font-weight: 700;
+        color: #58a6ff;
+    }
+    .win-prob-label {
+        font-size: 11px;
+        color: #8b949e;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+    }
+
+    /* Badges */
+    .badge {
+        display: inline-block;
+        padding: 4px 10px;
+        border-radius: 20px;
+        font-size: 11px;
+        font-weight: 600;
+        margin-right: 6px;
+    }
+    .badge-b2b {
+        background: #f85149;
+        color: white;
+    }
+    .badge-home {
+        background: #238636;
+        color: white;
+    }
+    .badge-strong {
+        background: #238636;
+        color: white;
+    }
+    .badge-lean {
+        background: #d29922;
+        color: white;
+    }
+    .badge-pass {
+        background: #484f58;
+        color: #8b949e;
+    }
+
+    /* Section headers */
+    .section-header {
+        font-size: 13px;
+        font-weight: 600;
+        color: #8b949e;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        margin: 15px 0 10px 0;
+        border-bottom: 1px solid #30363d;
+        padding-bottom: 8px;
+    }
+
+    /* Metric cards */
+    .metric-card {
+        background: #21262d;
+        border-radius: 8px;
+        padding: 12px;
         text-align: center;
+    }
+    .metric-value {
+        font-size: 24px;
+        font-weight: 700;
+        color: #58a6ff;
     }
     .metric-label {
+        font-size: 11px;
+        color: #8b949e;
+        text-transform: uppercase;
+    }
+
+    /* Positive/negative indicators */
+    .positive { color: #3fb950; }
+    .negative { color: #f85149; }
+    .neutral { color: #8b949e; }
+
+    /* Best bet highlight */
+    .best-bet {
+        background: linear-gradient(145deg, #238636 0%, #1a7f32 100%);
+        border-radius: 8px;
+        padding: 15px;
+        margin: 10px 0;
+    }
+    .best-bet-label {
+        font-size: 11px;
+        color: rgba(255,255,255,0.8);
+        text-transform: uppercase;
+        letter-spacing: 1px;
+    }
+    .best-bet-value {
+        font-size: 18px;
+        font-weight: 700;
+        color: white;
+    }
+
+    /* Game time */
+    .game-time {
+        font-size: 13px;
+        color: #58a6ff;
+        font-weight: 500;
+    }
+
+    /* Props section */
+    .prop-item {
+        display: flex;
+        justify-content: space-between;
+        padding: 8px 0;
+        border-bottom: 1px solid #30363d;
+    }
+    .prop-name {
+        color: #c9d1d9;
         font-size: 14px;
-        color: #666;
-        text-align: center;
     }
-    .edge-positive {
-        color: #28a745;
-        font-weight: bold;
+    .prop-value {
+        color: #58a6ff;
+        font-weight: 600;
+        font-size: 14px;
     }
-    .edge-negative {
-        color: #dc3545;
+
+    /* Recent games table */
+    .recent-game {
+        display: flex;
+        justify-content: space-between;
+        padding: 6px 0;
+        border-bottom: 1px solid #21262d;
+        font-size: 13px;
     }
-    .recommendation-strong {
-        background-color: #28a745;
-        color: white;
-        padding: 8px 16px;
-        border-radius: 4px;
-        font-weight: bold;
-    }
-    .recommendation-lean {
-        background-color: #ffc107;
-        color: black;
-        padding: 8px 16px;
-        border-radius: 4px;
-    }
-    .recommendation-pass {
-        background-color: #6c757d;
-        color: white;
-        padding: 8px 16px;
-        border-radius: 4px;
+    .game-result-w { color: #3fb950; font-weight: 600; }
+    .game-result-l { color: #f85149; font-weight: 600; }
+
+    /* Hide default streamlit elements */
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+
+    /* Expander styling */
+    .streamlit-expanderHeader {
+        background-color: #21262d !important;
+        border-radius: 8px !important;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# Team data
-TEAMS = {
-    "ANA": {"name": "Anaheim Ducks", "gf_60": 2.65, "ga_60": 3.35, "xgf_60": 2.70, "cf_pct": 47.2},
-    "BOS": {"name": "Boston Bruins", "gf_60": 3.15, "ga_60": 2.75, "xgf_60": 3.20, "cf_pct": 52.1},
-    "BUF": {"name": "Buffalo Sabres", "gf_60": 2.95, "ga_60": 3.20, "xgf_60": 2.90, "cf_pct": 48.5},
-    "CGY": {"name": "Calgary Flames", "gf_60": 2.80, "ga_60": 2.95, "xgf_60": 2.85, "cf_pct": 49.8},
-    "CAR": {"name": "Carolina Hurricanes", "gf_60": 3.35, "ga_60": 2.65, "xgf_60": 3.40, "cf_pct": 54.2},
-    "CHI": {"name": "Chicago Blackhawks", "gf_60": 2.55, "ga_60": 3.45, "xgf_60": 2.60, "cf_pct": 46.1},
-    "COL": {"name": "Colorado Avalanche", "gf_60": 3.45, "ga_60": 2.85, "xgf_60": 3.50, "cf_pct": 53.5},
-    "CBJ": {"name": "Columbus Blue Jackets", "gf_60": 2.70, "ga_60": 3.40, "xgf_60": 2.75, "cf_pct": 47.0},
-    "DAL": {"name": "Dallas Stars", "gf_60": 3.25, "ga_60": 2.70, "xgf_60": 3.30, "cf_pct": 52.8},
-    "DET": {"name": "Detroit Red Wings", "gf_60": 2.90, "ga_60": 3.10, "xgf_60": 2.95, "cf_pct": 49.2},
-    "EDM": {"name": "Edmonton Oilers", "gf_60": 3.55, "ga_60": 3.00, "xgf_60": 3.45, "cf_pct": 51.5},
-    "FLA": {"name": "Florida Panthers", "gf_60": 3.40, "ga_60": 2.75, "xgf_60": 3.35, "cf_pct": 53.0},
-    "LAK": {"name": "Los Angeles Kings", "gf_60": 3.05, "ga_60": 2.80, "xgf_60": 3.10, "cf_pct": 51.2},
-    "MIN": {"name": "Minnesota Wild", "gf_60": 3.00, "ga_60": 2.90, "xgf_60": 3.05, "cf_pct": 50.5},
-    "MTL": {"name": "Montreal Canadiens", "gf_60": 2.85, "ga_60": 3.25, "xgf_60": 2.80, "cf_pct": 48.0},
-    "NSH": {"name": "Nashville Predators", "gf_60": 2.75, "ga_60": 3.05, "xgf_60": 2.80, "cf_pct": 48.8},
-    "NJD": {"name": "New Jersey Devils", "gf_60": 3.20, "ga_60": 2.95, "xgf_60": 3.25, "cf_pct": 51.8},
-    "NYI": {"name": "New York Islanders", "gf_60": 2.80, "ga_60": 2.85, "xgf_60": 2.75, "cf_pct": 49.5},
-    "NYR": {"name": "New York Rangers", "gf_60": 3.10, "ga_60": 2.70, "xgf_60": 3.15, "cf_pct": 51.0},
-    "OTT": {"name": "Ottawa Senators", "gf_60": 2.95, "ga_60": 3.15, "xgf_60": 3.00, "cf_pct": 49.0},
-    "PHI": {"name": "Philadelphia Flyers", "gf_60": 2.85, "ga_60": 3.20, "xgf_60": 2.90, "cf_pct": 48.2},
-    "PIT": {"name": "Pittsburgh Penguins", "gf_60": 3.00, "ga_60": 3.10, "xgf_60": 3.05, "cf_pct": 50.0},
-    "SJS": {"name": "San Jose Sharks", "gf_60": 2.50, "ga_60": 3.50, "xgf_60": 2.55, "cf_pct": 45.5},
-    "SEA": {"name": "Seattle Kraken", "gf_60": 2.90, "ga_60": 3.00, "xgf_60": 2.95, "cf_pct": 49.5},
-    "STL": {"name": "St. Louis Blues", "gf_60": 2.85, "ga_60": 3.15, "xgf_60": 2.90, "cf_pct": 48.5},
-    "TBL": {"name": "Tampa Bay Lightning", "gf_60": 3.30, "ga_60": 2.90, "xgf_60": 3.25, "cf_pct": 52.0},
-    "TOR": {"name": "Toronto Maple Leafs", "gf_60": 3.35, "ga_60": 2.85, "xgf_60": 3.30, "cf_pct": 52.5},
-    "UTA": {"name": "Utah Hockey Club", "gf_60": 2.80, "ga_60": 3.10, "xgf_60": 2.85, "cf_pct": 48.5},
-    "VAN": {"name": "Vancouver Canucks", "gf_60": 3.20, "ga_60": 2.80, "xgf_60": 3.15, "cf_pct": 51.5},
-    "VGK": {"name": "Vegas Golden Knights", "gf_60": 3.25, "ga_60": 2.75, "xgf_60": 3.20, "cf_pct": 52.2},
-    "WSH": {"name": "Washington Capitals", "gf_60": 3.15, "ga_60": 2.90, "xgf_60": 3.10, "cf_pct": 50.8},
-    "WPG": {"name": "Winnipeg Jets", "gf_60": 3.40, "ga_60": 2.65, "xgf_60": 3.35, "cf_pct": 53.2},
+# Team name mapping
+TEAM_NAMES = {
+    "ANA": "Ducks", "BOS": "Bruins", "BUF": "Sabres", "CGY": "Flames",
+    "CAR": "Hurricanes", "CHI": "Blackhawks", "COL": "Avalanche", "CBJ": "Blue Jackets",
+    "DAL": "Stars", "DET": "Red Wings", "EDM": "Oilers", "FLA": "Panthers",
+    "LAK": "Kings", "MIN": "Wild", "MTL": "Canadiens", "NSH": "Predators",
+    "NJD": "Devils", "NYI": "Islanders", "NYR": "Rangers", "OTT": "Senators",
+    "PHI": "Flyers", "PIT": "Penguins", "SJS": "Sharks", "SEA": "Kraken",
+    "STL": "Blues", "TBL": "Lightning", "TOR": "Maple Leafs", "UTA": "Utah HC",
+    "VAN": "Canucks", "VGK": "Golden Knights", "WSH": "Capitals", "WPG": "Jets",
 }
 
-# Goalie data (sample - would be fetched from API in production)
-GOALIES = {
-    "ANA": [{"name": "John Gibson", "sv_pct": 0.903, "gsax": -5.2}, {"name": "Lukas Dostal", "sv_pct": 0.910, "gsax": 2.1}],
-    "BOS": [{"name": "Jeremy Swayman", "sv_pct": 0.918, "gsax": 8.5}, {"name": "Joonas Korpisalo", "sv_pct": 0.895, "gsax": -4.2}],
-    "BUF": [{"name": "Ukko-Pekka Luukkonen", "sv_pct": 0.908, "gsax": 1.2}, {"name": "Devon Levi", "sv_pct": 0.902, "gsax": -1.5}],
-    "CGY": [{"name": "Dustin Wolf", "sv_pct": 0.915, "gsax": 6.8}, {"name": "Dan Vladar", "sv_pct": 0.898, "gsax": -2.1}],
-    "CAR": [{"name": "Pyotr Kochetkov", "sv_pct": 0.912, "gsax": 5.5}, {"name": "Frederik Andersen", "sv_pct": 0.920, "gsax": 9.2}],
-    "CHI": [{"name": "Petr Mrazek", "sv_pct": 0.901, "gsax": -3.5}, {"name": "Arvid Soderblom", "sv_pct": 0.895, "gsax": -5.0}],
-    "COL": [{"name": "Alexandar Georgiev", "sv_pct": 0.905, "gsax": -1.8}, {"name": "Justus Annunen", "sv_pct": 0.908, "gsax": 1.5}],
-    "CBJ": [{"name": "Elvis Merzlikins", "sv_pct": 0.898, "gsax": -4.5}, {"name": "Daniil Tarasov", "sv_pct": 0.905, "gsax": 0.5}],
-    "DAL": [{"name": "Jake Oettinger", "sv_pct": 0.915, "gsax": 10.2}, {"name": "Casey DeSmith", "sv_pct": 0.902, "gsax": -1.0}],
-    "DET": [{"name": "Ville Husso", "sv_pct": 0.898, "gsax": -3.8}, {"name": "Alex Lyon", "sv_pct": 0.910, "gsax": 2.5}],
-    "EDM": [{"name": "Stuart Skinner", "sv_pct": 0.905, "gsax": -2.5}, {"name": "Calvin Pickard", "sv_pct": 0.908, "gsax": 1.2}],
-    "FLA": [{"name": "Sergei Bobrovsky", "sv_pct": 0.915, "gsax": 12.5}, {"name": "Spencer Knight", "sv_pct": 0.900, "gsax": -2.0}],
-    "LAK": [{"name": "Cam Talbot", "sv_pct": 0.908, "gsax": 2.0}, {"name": "David Rittich", "sv_pct": 0.902, "gsax": -1.5}],
-    "MIN": [{"name": "Filip Gustavsson", "sv_pct": 0.912, "gsax": 6.5}, {"name": "Marc-Andre Fleury", "sv_pct": 0.900, "gsax": -2.8}],
-    "MTL": [{"name": "Sam Montembeault", "sv_pct": 0.905, "gsax": 1.5}, {"name": "Cayden Primeau", "sv_pct": 0.895, "gsax": -4.0}],
-    "NSH": [{"name": "Juuse Saros", "sv_pct": 0.918, "gsax": 15.2}, {"name": "Scott Wedgewood", "sv_pct": 0.895, "gsax": -3.5}],
-    "NJD": [{"name": "Jacob Markstrom", "sv_pct": 0.908, "gsax": 3.5}, {"name": "Jake Allen", "sv_pct": 0.902, "gsax": -1.2}],
-    "NYI": [{"name": "Ilya Sorokin", "sv_pct": 0.915, "gsax": 11.0}, {"name": "Semyon Varlamov", "sv_pct": 0.905, "gsax": 1.8}],
-    "NYR": [{"name": "Igor Shesterkin", "sv_pct": 0.925, "gsax": 22.5}, {"name": "Jonathan Quick", "sv_pct": 0.900, "gsax": -2.5}],
-    "OTT": [{"name": "Linus Ullmark", "sv_pct": 0.915, "gsax": 9.8}, {"name": "Anton Forsberg", "sv_pct": 0.898, "gsax": -3.2}],
-    "PHI": [{"name": "Samuel Ersson", "sv_pct": 0.905, "gsax": 1.0}, {"name": "Ivan Fedotov", "sv_pct": 0.900, "gsax": -1.5}],
-    "PIT": [{"name": "Tristan Jarry", "sv_pct": 0.902, "gsax": -2.5}, {"name": "Alex Nedeljkovic", "sv_pct": 0.898, "gsax": -4.0}],
-    "SJS": [{"name": "Mackenzie Blackwood", "sv_pct": 0.908, "gsax": 5.5}, {"name": "Vitek Vanecek", "sv_pct": 0.895, "gsax": -5.5}],
-    "SEA": [{"name": "Joey Daccord", "sv_pct": 0.912, "gsax": 7.2}, {"name": "Philipp Grubauer", "sv_pct": 0.898, "gsax": -4.5}],
-    "STL": [{"name": "Jordan Binnington", "sv_pct": 0.905, "gsax": 0.5}, {"name": "Joel Hofer", "sv_pct": 0.908, "gsax": 2.0}],
-    "TBL": [{"name": "Andrei Vasilevskiy", "sv_pct": 0.915, "gsax": 13.5}, {"name": "Jonas Johansson", "sv_pct": 0.898, "gsax": -2.8}],
-    "TOR": [{"name": "Joseph Woll", "sv_pct": 0.912, "gsax": 8.0}, {"name": "Anthony Stolarz", "sv_pct": 0.918, "gsax": 10.5}],
-    "UTA": [{"name": "Karel Vejmelka", "sv_pct": 0.905, "gsax": 2.5}, {"name": "Connor Ingram", "sv_pct": 0.902, "gsax": 0.5}],
-    "VAN": [{"name": "Thatcher Demko", "sv_pct": 0.918, "gsax": 12.0}, {"name": "Kevin Lankinen", "sv_pct": 0.910, "gsax": 5.5}],
-    "VGK": [{"name": "Adin Hill", "sv_pct": 0.910, "gsax": 5.0}, {"name": "Ilya Samsonov", "sv_pct": 0.902, "gsax": -1.5}],
-    "WSH": [{"name": "Charlie Lindgren", "sv_pct": 0.908, "gsax": 3.5}, {"name": "Logan Thompson", "sv_pct": 0.912, "gsax": 6.0}],
-    "WPG": [{"name": "Connor Hellebuyck", "sv_pct": 0.925, "gsax": 28.5}, {"name": "Eric Comrie", "sv_pct": 0.895, "gsax": -3.5}],
+# Fallback team stats (used when API unavailable)
+FALLBACK_STATS = {
+    "ANA": {"gf_60": 2.65, "ga_60": 3.35, "shots_60": 28.5},
+    "BOS": {"gf_60": 3.15, "ga_60": 2.75, "shots_60": 32.0},
+    "BUF": {"gf_60": 2.95, "ga_60": 3.20, "shots_60": 30.5},
+    "CGY": {"gf_60": 2.80, "ga_60": 2.95, "shots_60": 29.5},
+    "CAR": {"gf_60": 3.35, "ga_60": 2.65, "shots_60": 34.0},
+    "CHI": {"gf_60": 2.55, "ga_60": 3.45, "shots_60": 27.0},
+    "COL": {"gf_60": 3.45, "ga_60": 2.85, "shots_60": 33.5},
+    "CBJ": {"gf_60": 2.70, "ga_60": 3.40, "shots_60": 28.0},
+    "DAL": {"gf_60": 3.25, "ga_60": 2.70, "shots_60": 31.5},
+    "DET": {"gf_60": 2.90, "ga_60": 3.10, "shots_60": 29.0},
+    "EDM": {"gf_60": 3.55, "ga_60": 3.00, "shots_60": 32.5},
+    "FLA": {"gf_60": 3.40, "ga_60": 2.75, "shots_60": 33.0},
+    "LAK": {"gf_60": 3.05, "ga_60": 2.80, "shots_60": 31.0},
+    "MIN": {"gf_60": 3.00, "ga_60": 2.90, "shots_60": 30.0},
+    "MTL": {"gf_60": 2.85, "ga_60": 3.25, "shots_60": 29.5},
+    "NSH": {"gf_60": 2.75, "ga_60": 3.05, "shots_60": 28.5},
+    "NJD": {"gf_60": 3.20, "ga_60": 2.95, "shots_60": 31.5},
+    "NYI": {"gf_60": 2.80, "ga_60": 2.85, "shots_60": 29.0},
+    "NYR": {"gf_60": 3.10, "ga_60": 2.70, "shots_60": 30.5},
+    "OTT": {"gf_60": 2.95, "ga_60": 3.15, "shots_60": 30.0},
+    "PHI": {"gf_60": 2.85, "ga_60": 3.20, "shots_60": 29.5},
+    "PIT": {"gf_60": 3.00, "ga_60": 3.10, "shots_60": 30.5},
+    "SJS": {"gf_60": 2.50, "ga_60": 3.50, "shots_60": 27.5},
+    "SEA": {"gf_60": 2.90, "ga_60": 3.00, "shots_60": 29.5},
+    "STL": {"gf_60": 2.85, "ga_60": 3.15, "shots_60": 29.0},
+    "TBL": {"gf_60": 3.30, "ga_60": 2.90, "shots_60": 32.0},
+    "TOR": {"gf_60": 3.35, "ga_60": 2.85, "shots_60": 33.0},
+    "UTA": {"gf_60": 2.80, "ga_60": 3.10, "shots_60": 29.0},
+    "VAN": {"gf_60": 3.20, "ga_60": 2.80, "shots_60": 31.5},
+    "VGK": {"gf_60": 3.25, "ga_60": 2.75, "shots_60": 32.0},
+    "WSH": {"gf_60": 3.15, "ga_60": 2.90, "shots_60": 30.5},
+    "WPG": {"gf_60": 3.40, "ga_60": 2.65, "shots_60": 32.5},
 }
 
 
-def run_prediction(home_team, away_team, home_goalie, away_goalie, home_ml, away_ml, ou_line):
-    """Run full prediction pipeline."""
+@st.cache_data(ttl=300)  # Cache for 5 minutes
+def fetch_todays_games():
+    """Fetch today's games from NHL API."""
+    try:
+        ingestor = DataIngestor()
+        games = ingestor.fetch_schedule()
+        return games
+    except Exception as e:
+        st.warning(f"Could not fetch live schedule: {e}")
+        return []
 
-    # Get team stats
-    home_stats = TEAMS[home_team]
-    away_stats = TEAMS[away_team]
 
-    # Initialize agents
+@st.cache_data(ttl=3600)  # Cache for 1 hour
+def get_team_stats(team_code: str) -> Dict:
+    """Get team stats (live or fallback)."""
+    return FALLBACK_STATS.get(team_code, {"gf_60": 3.0, "ga_60": 3.0, "shots_60": 30.0})
+
+
+@st.cache_data(ttl=300)
+def check_back_to_back(team_code: str) -> tuple:
+    """Check if team is on back-to-back."""
+    try:
+        ingestor = DataIngestor()
+        is_b2b, prev_opponent = ingestor.is_back_to_back(team_code)
+        return is_b2b, prev_opponent
+    except Exception:
+        return False, None
+
+
+@st.cache_data(ttl=600)
+def fetch_last_5_games(team_code: str) -> List[Dict]:
+    """Fetch last 5 games for a team."""
+    try:
+        ingestor = DataIngestor()
+        return ingestor.fetch_last_n_games(team_code, n=5)
+    except Exception:
+        return []
+
+
+@st.cache_data(ttl=600)
+def fetch_h2h_games(team1: str, team2: str) -> List[Dict]:
+    """Fetch head-to-head history."""
+    try:
+        ingestor = DataIngestor()
+        return ingestor.fetch_h2h_games(team1, team2, n=5)
+    except Exception:
+        return []
+
+
+def run_full_prediction(home_code: str, away_code: str, ou_line: float = 6.0) -> Dict:
+    """Run complete prediction pipeline for a game."""
+    home_stats = get_team_stats(home_code)
+    away_stats = get_team_stats(away_code)
+
+    # Initialize models
     poisson = PoissonEngine()
     mc = MonteCarloSimulator(MonteCarloConfig(n_simulations=10000))
-    edge = EdgeCalculator()
+    edge_calc = EdgeCalculator()
+    period_model = PeriodModel()
+    props_model = PropsModel()
 
     # Run Poisson model
     poisson_result = poisson.predict(
         home_stats={'gf_60': home_stats['gf_60'], 'ga_60': home_stats['ga_60']},
         away_stats={'gf_60': away_stats['gf_60'], 'ga_60': away_stats['ga_60']},
-        home_goalie={'gsax': home_goalie['gsax'], 'sv_pct': home_goalie['sv_pct']},
-        away_goalie={'gsax': away_goalie['gsax'], 'sv_pct': away_goalie['sv_pct']},
         over_under_line=ou_line,
     )
 
-    # Run Monte Carlo simulation
+    # Run Monte Carlo
     mc_result = mc.simulate_games(
         poisson_result['lambda_home'],
         poisson_result['lambda_away']
@@ -168,304 +337,349 @@ def run_prediction(home_team, away_team, home_goalie, away_goalie, home_ml, away
         [ou_line - 0.5, ou_line, ou_line + 0.5]
     )
 
-    # Edge analysis
-    edge_result = edge.full_game_analysis(
+    # First period prediction
+    p1_result = period_model.predict_first_period(
+        poisson_result['lambda_home'],
+        poisson_result['lambda_away']
+    )
+
+    # Props calculation
+    props_result = props_model.calculate_all_props(
+        home_stats={'gf_60': home_stats['gf_60'], 'ga_60': home_stats['ga_60'],
+                    'shots_60': home_stats.get('shots_60', 30.0), 'team': home_code},
+        away_stats={'gf_60': away_stats['gf_60'], 'ga_60': away_stats['ga_60'],
+                    'shots_60': away_stats.get('shots_60', 30.0), 'team': away_code},
+    )
+
+    # Edge analysis (using placeholder odds)
+    edge_result = edge_calc.full_game_analysis(
         home_win_prob=mc_result['final']['home_win_prob'],
         over_prob=ou_result.get(ou_line, {}).get('over_prob', 0.5),
-        home_ml=home_ml,
-        away_ml=away_ml,
+        home_ml=-150,  # Placeholder
+        away_ml=130,   # Placeholder
         total_line=ou_line,
     )
 
     return {
+        'home_team': {'code': home_code, 'name': TEAM_NAMES.get(home_code, home_code)},
+        'away_team': {'code': away_code, 'name': TEAM_NAMES.get(away_code, away_code)},
         'poisson': poisson_result,
         'monte_carlo': mc_result,
         'over_under': ou_result,
+        'first_period': p1_result,
+        'props': props_result,
         'edge': edge_result,
+        'odds': {'over_under': ou_line},
     }
 
 
-# =============================================================================
-# STREAMLIT UI
-# =============================================================================
+def render_game_card(game: Dict, prediction: Dict, expanded: bool = False):
+    """Render a single game card."""
+    home = prediction['home_team']
+    away = prediction['away_team']
+    mc = prediction['monte_carlo']['final']
 
-st.title("🏒 NHL Game Prediction Model")
-st.markdown("**Poisson Distribution + Monte Carlo Simulation + ML Ensemble**")
-st.markdown("---")
+    # Check for B2B using DataIngestor
+    home_b2b, home_prev = check_back_to_back(home['code'])
+    away_b2b, away_prev = check_back_to_back(away['code'])
 
-# Sidebar - Game Setup
-st.sidebar.header("Game Setup")
+    # Main card container
+    with st.container():
+        # Header row: Teams and time
+        cols = st.columns([3, 2, 3])
 
-col1, col2 = st.sidebar.columns(2)
+        with cols[0]:
+            st.markdown(f"""
+                <div style='text-align: center;'>
+                    <div class='team-code'>{away['code']}</div>
+                    <div class='team-name'>{away['name']}</div>
+                    {'<span class="badge badge-b2b">B2B</span>' if away_b2b else ''}
+                </div>
+            """, unsafe_allow_html=True)
+            st.markdown(f"""
+                <div style='text-align: center;'>
+                    <div class='win-prob'>{mc['away_win_prob']*100:.0f}%</div>
+                    <div class='win-prob-label'>Win Prob</div>
+                </div>
+            """, unsafe_allow_html=True)
 
-with col1:
-    away_team = st.selectbox(
-        "Away Team",
-        options=list(TEAMS.keys()),
-        format_func=lambda x: f"{x} - {TEAMS[x]['name']}",
-        index=list(TEAMS.keys()).index("MTL"),
-    )
+        with cols[1]:
+            st.markdown("""
+                <div style='text-align: center; padding-top: 20px;'>
+                    <div style='font-size: 24px; color: #8b949e;'>@</div>
+                </div>
+            """, unsafe_allow_html=True)
+            # Expected total
+            exp_total = prediction['poisson']['expected_total']
+            st.markdown(f"""
+                <div style='text-align: center; margin-top: 10px;'>
+                    <div style='font-size: 14px; color: #8b949e;'>Total: {exp_total:.1f}</div>
+                </div>
+            """, unsafe_allow_html=True)
 
-with col2:
-    home_team = st.selectbox(
-        "Home Team",
-        options=list(TEAMS.keys()),
-        format_func=lambda x: f"{x} - {TEAMS[x]['name']}",
-        index=list(TEAMS.keys()).index("TOR"),
-    )
+        with cols[2]:
+            st.markdown(f"""
+                <div style='text-align: center;'>
+                    <div class='team-code'>{home['code']}</div>
+                    <div class='team-name'>{home['name']}</div>
+                    <span class="badge badge-home">HOME</span>
+                    {'<span class="badge badge-b2b">B2B</span>' if home_b2b else ''}
+                </div>
+            """, unsafe_allow_html=True)
+            st.markdown(f"""
+                <div style='text-align: center;'>
+                    <div class='win-prob'>{mc['home_win_prob']*100:.0f}%</div>
+                    <div class='win-prob-label'>Win Prob</div>
+                </div>
+            """, unsafe_allow_html=True)
 
-st.sidebar.markdown("---")
-st.sidebar.subheader("Goalie Selection")
-
-# Goalie dropdowns
-home_goalie_options = GOALIES.get(home_team, [{"name": "Starter", "sv_pct": 0.905, "gsax": 0}])
-away_goalie_options = GOALIES.get(away_team, [{"name": "Starter", "sv_pct": 0.905, "gsax": 0}])
-
-home_goalie_name = st.sidebar.selectbox(
-    f"{home_team} Goalie",
-    options=[g['name'] for g in home_goalie_options],
-)
-home_goalie = next(g for g in home_goalie_options if g['name'] == home_goalie_name)
-
-away_goalie_name = st.sidebar.selectbox(
-    f"{away_team} Goalie",
-    options=[g['name'] for g in away_goalie_options],
-)
-away_goalie = next(g for g in away_goalie_options if g['name'] == away_goalie_name)
-
-st.sidebar.markdown("---")
-st.sidebar.subheader("Betting Lines")
-
-home_ml = st.sidebar.number_input("Home Moneyline", value=-150, step=5)
-away_ml = st.sidebar.number_input("Away Moneyline", value=130, step=5)
-ou_line = st.sidebar.number_input("Over/Under Line", value=6.5, step=0.5)
-
-# Run prediction button
-if st.sidebar.button("🎯 Run Prediction", type="primary", use_container_width=True):
-
-    with st.spinner("Running 10,000 Monte Carlo simulations..."):
-        results = run_prediction(
-            home_team, away_team,
-            home_goalie, away_goalie,
-            home_ml, away_ml, ou_line
-        )
-
-    # Store in session state
-    st.session_state['results'] = results
-    st.session_state['home_team'] = home_team
-    st.session_state['away_team'] = away_team
-
-# Display results if available
-if 'results' in st.session_state:
-    results = st.session_state['results']
-    home_team = st.session_state['home_team']
-    away_team = st.session_state['away_team']
-
-    # Header
-    st.markdown(f"### {TEAMS[away_team]['name']} @ {TEAMS[home_team]['name']}")
-    st.markdown(f"*{date.today().strftime('%B %d, %Y')}*")
-
-    # Main prediction display
-    st.markdown("---")
-
-    col1, col2, col3 = st.columns([2, 1, 2])
-
-    with col1:
-        away_prob = results['monte_carlo']['final']['away_win_prob']
-        st.markdown(f"<div class='big-number'>{away_prob*100:.1f}%</div>", unsafe_allow_html=True)
-        st.markdown(f"<div class='metric-label'>{TEAMS[away_team]['name']}</div>", unsafe_allow_html=True)
-
-    with col2:
-        st.markdown("<div style='text-align: center; font-size: 24px; padding-top: 20px;'>VS</div>", unsafe_allow_html=True)
-
-    with col3:
-        home_prob = results['monte_carlo']['final']['home_win_prob']
-        st.markdown(f"<div class='big-number'>{home_prob*100:.1f}%</div>", unsafe_allow_html=True)
-        st.markdown(f"<div class='metric-label'>{TEAMS[home_team]['name']}</div>", unsafe_allow_html=True)
-
-    st.markdown("---")
-
-    # Detailed results in tabs
-    tab1, tab2, tab3, tab4 = st.tabs(["📊 Prediction Details", "🎰 Betting Edge", "📈 Score Distribution", "⚙️ Model Details"])
-
-    with tab1:
-        col1, col2 = st.columns(2)
-
-        with col1:
-            st.markdown("#### Expected Goals")
-            st.metric(f"{home_team} (Home)", f"{results['poisson']['lambda_home']:.2f}")
-            st.metric(f"{away_team} (Away)", f"{results['poisson']['lambda_away']:.2f}")
-            st.metric("Expected Total", f"{results['poisson']['expected_total']:.1f}")
-
-        with col2:
-            st.markdown("#### Most Likely Outcomes")
-            st.metric("Predicted Score", results['monte_carlo']['scores']['most_likely'])
-            st.metric("OT Probability", f"{results['monte_carlo']['meta']['overtime_games']*100:.1f}%")
-
-            # 60-min results
-            st.markdown("**60-Minute Result:**")
-            reg = results['monte_carlo']['sixty_min']
-            st.write(f"- {home_team} Win: {reg['home_win_prob']*100:.1f}%")
-            st.write(f"- {away_team} Win: {reg['away_win_prob']*100:.1f}%")
-            st.write(f"- Tie (→OT): {reg['tie_prob']*100:.1f}%")
-
-    with tab2:
-        st.markdown("#### Moneyline Analysis")
-
-        edge_ml = results['edge']['moneyline']
-
-        col1, col2 = st.columns(2)
-
-        with col1:
-            st.markdown(f"**{home_team} ({home_ml:+d})**")
-            edge_val = edge_ml['home']['edge'] * 100
-            edge_class = "edge-positive" if edge_val > 0 else "edge-negative"
-            st.markdown(f"Edge: <span class='{edge_class}'>{edge_val:+.1f}%</span>", unsafe_allow_html=True)
-            st.write(f"Kelly: {edge_ml['home']['kelly']*100:.1f}% of bankroll")
-            st.write(f"EV/$100: ${edge_ml['home']['ev_per_100']:.2f}")
-
-            rec = edge_ml['home']['recommendation']
-            if "STRONG" in rec:
-                st.markdown(f"<span class='recommendation-strong'>{rec}</span>", unsafe_allow_html=True)
-            elif "LEAN" in rec:
-                st.markdown(f"<span class='recommendation-lean'>{rec}</span>", unsafe_allow_html=True)
-            else:
-                st.markdown(f"<span class='recommendation-pass'>{rec}</span>", unsafe_allow_html=True)
-
-        with col2:
-            st.markdown(f"**{away_team} ({away_ml:+d})**")
-            edge_val = edge_ml['away']['edge'] * 100
-            edge_class = "edge-positive" if edge_val > 0 else "edge-negative"
-            st.markdown(f"Edge: <span class='{edge_class}'>{edge_val:+.1f}%</span>", unsafe_allow_html=True)
-            st.write(f"Kelly: {edge_ml['away']['kelly']*100:.1f}% of bankroll")
-            st.write(f"EV/$100: ${edge_ml['away']['ev_per_100']:.2f}")
-
-            rec = edge_ml['away']['recommendation']
-            if "STRONG" in rec:
-                st.markdown(f"<span class='recommendation-strong'>{rec}</span>", unsafe_allow_html=True)
-            elif "LEAN" in rec:
-                st.markdown(f"<span class='recommendation-lean'>{rec}</span>", unsafe_allow_html=True)
-            else:
-                st.markdown(f"<span class='recommendation-pass'>{rec}</span>", unsafe_allow_html=True)
+        # Best bet highlight
+        top_plays = prediction['edge'].get('top_plays', [])
+        if top_plays:
+            best = top_plays[0]
+            edge_pct = best['edge'] * 100
+            st.markdown(f"""
+                <div class='best-bet'>
+                    <div class='best-bet-label'>Best Bet</div>
+                    <div class='best-bet-value'>{best['type'].upper()} {best['side'].upper()} ({edge_pct:+.1f}% edge)</div>
+                </div>
+            """, unsafe_allow_html=True)
 
         st.markdown("---")
-        st.markdown("#### Over/Under Analysis")
 
-        edge_ou = results['edge']['over_under']
+
+def render_game_details(prediction: Dict):
+    """Render expanded game details."""
+    home = prediction['home_team']
+    away = prediction['away_team']
+
+    # PDF export button at top
+    if HAS_PDF_EXPORT:
+        col1, col2, col3 = st.columns([2, 1, 2])
+        with col2:
+            try:
+                pdf_bytes = export_game_pdf(prediction)
+                filename = f"{away['code']}_at_{home['code']}_{date.today().isoformat()}.pdf"
+                st.download_button(
+                    label="Download PDF",
+                    data=pdf_bytes,
+                    file_name=filename,
+                    mime="application/pdf",
+                    use_container_width=True,
+                )
+            except Exception as e:
+                st.warning(f"PDF export unavailable: {e}")
+
+    # Tabs for different analysis sections
+    tabs = st.tabs(["Prediction", "1st Period", "Props", "Recent Form"])
+
+    with tabs[0]:
+        # Main prediction details
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.markdown("**Expected Goals**")
+            st.metric(f"{home['code']} (Home)", f"{prediction['poisson']['lambda_home']:.2f}")
+            st.metric(f"{away['code']} (Away)", f"{prediction['poisson']['lambda_away']:.2f}")
+            st.metric("Total", f"{prediction['poisson']['expected_total']:.1f}")
+
+        with col2:
+            st.markdown("**Score Prediction**")
+            st.write(f"Most Likely: **{prediction['monte_carlo']['scores']['most_likely']}**")
+            st.write(f"OT Probability: {prediction['monte_carlo']['meta']['overtime_games']*100:.1f}%")
+
+            st.markdown("**60-Min Result:**")
+            reg = prediction['monte_carlo']['sixty_min']
+            st.write(f"- {home['code']} Win: {reg['home_win_prob']*100:.1f}%")
+            st.write(f"- {away['code']} Win: {reg['away_win_prob']*100:.1f}%")
+            st.write(f"- Tie: {reg['tie_prob']*100:.1f}%")
+
+    with tabs[1]:
+        # First period analysis
+        p1 = prediction.get('first_period', {})
+        if p1:
+            col1, col2 = st.columns(2)
+
+            with col1:
+                st.markdown("**1st Period Expected Goals**")
+                st.metric(f"{home['code']}", f"{p1.get('lambda_home', 0):.2f}")
+                st.metric(f"{away['code']}", f"{p1.get('lambda_away', 0):.2f}")
+                st.metric("Total", f"{p1.get('expected_total', 0):.2f}")
+
+            with col2:
+                st.markdown("**1st Period O/U**")
+                ou = p1.get('over_under', {})
+                for line in [0.5, 1.5, 2.5]:
+                    line_data = ou.get(line, {})
+                    over_prob = line_data.get('over_prob', 0) * 100
+                    st.write(f"Over {line}: **{over_prob:.1f}%**")
+
+                st.markdown("**Most Likely Score**")
+                st.write(f"**{p1.get('most_likely_score', 'N/A')}**")
+
+    with tabs[2]:
+        # Props analysis
+        props = prediction.get('props', {})
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.markdown("**GIFT (Goal In First 10)**")
+            gift = props.get('gift', {})
+            gift_prob = gift.get('gift_prob', 0) * 100
+            vs_league = gift.get('vs_league', 0) * 100
+
+            st.metric("Probability", f"{gift_prob:.1f}%")
+            st.write(f"League Avg: 58%")
+            color = "positive" if vs_league > 0 else "negative"
+            st.markdown(f"vs League: <span class='{color}'>{vs_league:+.1f}%</span>", unsafe_allow_html=True)
+
+        with col2:
+            st.markdown("**1+ SOG in First 2 Min**")
+            sog = props.get('sog_2min', {})
+            sog_prob = sog.get('either_team_sog_prob', 0) * 100
+
+            st.metric("Either Team", f"{sog_prob:.1f}%")
+            st.write(f"{home['code']}: {sog.get('home_sog_prob', 0)*100:.1f}%")
+            st.write(f"{away['code']}: {sog.get('away_sog_prob', 0)*100:.1f}%")
+
+    with tabs[3]:
+        # Recent form with live data
+        st.markdown("**Last 5 Games**")
 
         col1, col2 = st.columns(2)
 
         with col1:
-            st.markdown(f"**Over {ou_line}**")
-            over_prob = results['over_under'].get(ou_line, {}).get('over_prob', 0.5) * 100
-            st.write(f"Model Probability: {over_prob:.1f}%")
-            edge_val = edge_ou['over']['edge'] * 100
-            edge_class = "edge-positive" if edge_val > 0 else "edge-negative"
-            st.markdown(f"Edge: <span class='{edge_class}'>{edge_val:+.1f}%</span>", unsafe_allow_html=True)
-
-            rec = edge_ou['over']['recommendation']
-            if "STRONG" in rec:
-                st.markdown(f"<span class='recommendation-strong'>{rec}</span>", unsafe_allow_html=True)
-            elif "LEAN" in rec:
-                st.markdown(f"<span class='recommendation-lean'>{rec}</span>", unsafe_allow_html=True)
+            st.markdown(f"**{home['code']}**")
+            home_l5 = fetch_last_5_games(home['code'])
+            if home_l5:
+                wins = sum(1 for g in home_l5 if g.get('result', '').startswith('W'))
+                losses = len(home_l5) - wins
+                results_str = ' '.join([g.get('result', '?')[0] for g in home_l5])
+                st.write(f"{results_str} ({wins}-{losses})")
+                for g in home_l5[:3]:
+                    opponent = g.get('opponent', '???')
+                    score = g.get('score', '0-0')
+                    result = g.get('result', '?')
+                    color = "game-result-w" if result.startswith('W') else "game-result-l"
+                    st.markdown(f"<span class='{color}'>{result}</span> vs {opponent} ({score})", unsafe_allow_html=True)
             else:
-                st.markdown(f"<span class='recommendation-pass'>{rec}</span>", unsafe_allow_html=True)
+                st.write("No recent games available")
 
         with col2:
-            st.markdown(f"**Under {ou_line}**")
-            under_prob = results['over_under'].get(ou_line, {}).get('under_prob', 0.5) * 100
-            st.write(f"Model Probability: {under_prob:.1f}%")
-            edge_val = edge_ou['under']['edge'] * 100
-            edge_class = "edge-positive" if edge_val > 0 else "edge-negative"
-            st.markdown(f"Edge: <span class='{edge_class}'>{edge_val:+.1f}%</span>", unsafe_allow_html=True)
-
-            rec = edge_ou['under']['recommendation']
-            if "STRONG" in rec:
-                st.markdown(f"<span class='recommendation-strong'>{rec}</span>", unsafe_allow_html=True)
-            elif "LEAN" in rec:
-                st.markdown(f"<span class='recommendation-lean'>{rec}</span>", unsafe_allow_html=True)
+            st.markdown(f"**{away['code']}**")
+            away_l5 = fetch_last_5_games(away['code'])
+            if away_l5:
+                wins = sum(1 for g in away_l5 if g.get('result', '').startswith('W'))
+                losses = len(away_l5) - wins
+                results_str = ' '.join([g.get('result', '?')[0] for g in away_l5])
+                st.write(f"{results_str} ({wins}-{losses})")
+                for g in away_l5[:3]:
+                    opponent = g.get('opponent', '???')
+                    score = g.get('score', '0-0')
+                    result = g.get('result', '?')
+                    color = "game-result-w" if result.startswith('W') else "game-result-l"
+                    st.markdown(f"<span class='{color}'>{result}</span> vs {opponent} ({score})", unsafe_allow_html=True)
             else:
-                st.markdown(f"<span class='recommendation-pass'>{rec}</span>", unsafe_allow_html=True)
+                st.write("No recent games available")
 
-        # Top plays summary
-        if results['edge'].get('top_plays'):
-            st.markdown("---")
-            st.markdown("#### 🎯 Top Plays")
-            for i, play in enumerate(results['edge']['top_plays'], 1):
-                edge_pct = play['edge'] * 100
-                st.write(f"{i}. **{play['type'].upper()} {play['side'].upper()}** - Edge: {edge_pct:+.1f}% ({play['confidence']})")
+        # Head-to-Head
+        st.markdown("---")
+        st.markdown("**Head-to-Head (Last 5)**")
+        h2h = fetch_h2h_games(home['code'], away['code'])
+        if h2h:
+            for g in h2h[:5]:
+                game_date = g.get('date', 'Unknown')
+                score = g.get('score', '0-0')
+                winner = g.get('winner', '???')
+                st.write(f"{game_date}: {score} - Winner: **{winner}**")
+        else:
+            st.write("No H2H data available")
 
-    with tab3:
-        st.markdown("#### Score Probability Distribution")
 
-        # Create score distribution chart
-        scores = results['monte_carlo']['scores']['distribution']
-        score_df = pd.DataFrame([
-            {'Score': k, 'Probability': v * 100}
-            for k, v in sorted(scores.items(), key=lambda x: x[1], reverse=True)[:15]
-        ])
+# =============================================================================
+# MAIN APP
+# =============================================================================
 
-        st.bar_chart(score_df.set_index('Score'))
+st.markdown("""
+    <div style='text-align: center; padding: 20px 0;'>
+        <h1 style='color: #58a6ff; margin: 0;'>NHL Predictions</h1>
+        <p style='color: #8b949e; font-size: 14px;'>Poisson + Monte Carlo + ML Ensemble</p>
+    </div>
+""", unsafe_allow_html=True)
 
-        st.markdown("#### Top 10 Most Likely Scores")
-        for i, (score, prob) in enumerate(sorted(scores.items(), key=lambda x: x[1], reverse=True)[:10], 1):
-            st.write(f"{i}. **{score}** - {prob*100:.1f}%")
+# Date selector
+col1, col2, col3 = st.columns([1, 2, 1])
+with col2:
+    selected_date = st.date_input("Select Date", value=date.today())
 
-    with tab4:
-        st.markdown("#### Model Configuration")
-        st.write(f"- **Simulations:** 10,000")
-        st.write(f"- **Home Ice Advantage:** 6%")
-        st.write(f"- **OT Rate (historical):** ~23%")
+st.markdown("---")
 
-        st.markdown("#### Team Stats Used")
-        col1, col2 = st.columns(2)
+# Fetch games for selected date
+games = fetch_todays_games()
 
-        with col1:
-            st.markdown(f"**{home_team}**")
-            st.write(f"- GF/60: {TEAMS[home_team]['gf_60']}")
-            st.write(f"- GA/60: {TEAMS[home_team]['ga_60']}")
-            st.write(f"- xGF/60: {TEAMS[home_team]['xgf_60']}")
-            st.write(f"- CF%: {TEAMS[home_team]['cf_pct']}")
-            st.write(f"- Goalie: {home_goalie_name}")
-            st.write(f"- Goalie SV%: {home_goalie['sv_pct']}")
-            st.write(f"- Goalie GSAX: {home_goalie['gsax']}")
+if not games:
+    st.info("No games scheduled for today. Showing demo predictions.")
+    # Demo games
+    demo_matchups = [
+        ("TOR", "MTL"),
+        ("EDM", "VGK"),
+        ("COL", "DAL"),
+    ]
 
-        with col2:
-            st.markdown(f"**{away_team}**")
-            st.write(f"- GF/60: {TEAMS[away_team]['gf_60']}")
-            st.write(f"- GA/60: {TEAMS[away_team]['ga_60']}")
-            st.write(f"- xGF/60: {TEAMS[away_team]['xgf_60']}")
-            st.write(f"- CF%: {TEAMS[away_team]['cf_pct']}")
-            st.write(f"- Goalie: {away_goalie_name}")
-            st.write(f"- Goalie SV%: {away_goalie['sv_pct']}")
-            st.write(f"- Goalie GSAX: {away_goalie['gsax']}")
+    for home, away in demo_matchups:
+        prediction = run_full_prediction(home, away)
+
+        with st.expander(f"{away} @ {home}", expanded=False):
+            render_game_card({}, prediction)
+            render_game_details(prediction)
 
 else:
-    # Default state - show instructions
-    st.info("👈 Select teams, goalies, and betting lines in the sidebar, then click **Run Prediction**")
+    st.markdown(f"### {len(games)} Games Today")
 
-    st.markdown("### How It Works")
+    for game in games:
+        home_code = game.get('home_team', 'UNK')
+        away_code = game.get('away_team', 'UNK')
+        game_time = game.get('start_time', '')
 
-    col1, col2, col3 = st.columns(3)
+        # Run prediction
+        prediction = run_full_prediction(home_code, away_code)
 
-    with col1:
-        st.markdown("#### 1️⃣ Poisson Model")
-        st.write("Calculates expected goals (λ) for each team based on offensive/defensive strength and goalie adjustments.")
+        # Add game time to prediction
+        prediction['game_time'] = game_time
 
-    with col2:
-        st.markdown("#### 2️⃣ Monte Carlo")
-        st.write("Simulates 10,000 games using Poisson-distributed scores, including overtime/shootout resolution.")
+        with st.expander(f"{away_code} @ {home_code} - {game_time}", expanded=False):
+            render_game_card(game, prediction)
+            render_game_details(prediction)
 
-    with col3:
-        st.markdown("#### 3️⃣ Edge Analysis")
-        st.write("Compares model probabilities to betting lines to identify value. Calculates Kelly criterion for optimal sizing.")
+# Sidebar for manual game entry
+with st.sidebar:
+    st.markdown("### Manual Game Entry")
+
+    teams = list(TEAM_NAMES.keys())
+
+    away_team = st.selectbox("Away Team", teams, index=teams.index("MTL"))
+    home_team = st.selectbox("Home Team", teams, index=teams.index("TOR"))
+    ou_line = st.number_input("O/U Line", value=6.0, step=0.5)
+
+    if st.button("Run Prediction", type="primary", use_container_width=True):
+        with st.spinner("Running 10,000 simulations..."):
+            manual_pred = run_full_prediction(home_team, away_team, ou_line)
+            st.session_state['manual_prediction'] = manual_pred
+
+    if 'manual_prediction' in st.session_state:
+        st.markdown("---")
+        pred = st.session_state['manual_prediction']
+        mc = pred['monte_carlo']['final']
+
+        st.markdown(f"**{pred['away_team']['code']} @ {pred['home_team']['code']}**")
+        st.write(f"Home Win: {mc['home_win_prob']*100:.1f}%")
+        st.write(f"Away Win: {mc['away_win_prob']*100:.1f}%")
+        st.write(f"Expected Total: {pred['poisson']['expected_total']:.1f}")
 
 # Footer
 st.markdown("---")
-st.markdown(
-    "<div style='text-align: center; color: #666; font-size: 12px;'>"
-    "NHL Prediction Model v1.0 | Poisson + Monte Carlo + ML Ensemble | "
-    "Data: Natural Stat Trick, MoneyPuck"
-    "</div>",
-    unsafe_allow_html=True
-)
+st.markdown("""
+    <div style='text-align: center; color: #8b949e; font-size: 12px; padding: 20px 0;'>
+        NHL Prediction Model v2.0 | Data: NHL API, MoneyPuck, Natural Stat Trick
+    </div>
+""", unsafe_allow_html=True)
